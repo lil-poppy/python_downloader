@@ -45,7 +45,6 @@ def request_manager(url, stream=False, verify=True, retrys=0):
             return f"404: Not found ({url})"
         elif r.status_code == 429:
             return f"429: Too Many Requests ({url})"
-        # Daca eroare nu e prinsa mai sus, ridica SystemExit() cu eroarea ca argument
         # If the error isn't specifically caught, return it as a string
         else:
             return str(e)
@@ -58,8 +57,6 @@ def download_file(filename, link):
     # if r is not requests.models.Response, it means is an error caugth in request_manager
     if not isinstance(r, requests.models.Response):
         return r
-    # Verifica daca fisierul exista, daca cererea are Content-Length in header si daca acesta (care e marimea necesara)
-    # e egal cu marimea fisierului existent, iar daca toate astea sunt adevarate, returneaza
     if os.path.isfile(filename):
         if "Content-Length" in list(r.headers.keys()):
             # Check if Content-Length == it's size
