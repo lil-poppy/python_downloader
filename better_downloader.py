@@ -57,6 +57,7 @@ def download_file(filename, link):
     # if r is not requests.models.Response, it means is an error caugth in request_manager
     if not isinstance(r, requests.models.Response):
         return r
+    # Check if the file exists
     if os.path.isfile(filename):
         if "Content-Length" in list(r.headers.keys()):
             # Check if Content-Length == it's size
