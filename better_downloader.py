@@ -1,91 +1,111 @@
 #!/usr/bin/env python
 import os, requests, shutil, youtube_dl, time, socket
+from mongoengine import connect, disconnect
+from sys import exit
+from app_variables import local_vars
+from post.file_log import err_log, conn_log
+from db.updater_models import Updater
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# Ignore InsecureRequestWarning if verify=false is passed as an argument to requests.get()
-requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
+requests.packages.urllib3.disable_warnings(
+    requests.packages.urllib3.exceptions.InsecureRequestWarning
+)
 
-def request_manager(url, stream=False, verify=True, retrys=0):
-    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.90 Safari/537.36'}
+# Error catcher for requests
+def request_manager(
+    url, stream=False, verify=True, retries=0, cookies=None, headers=dict()
+):
+    headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.90 Safari/537.36"
+        }
+    )
     try:
-        r = requests.get(url, headers=headers, stream=stream, verify=verify)
-        # Raise HTTPError if status code is 4xx or 5xx
-        r.raise_for_status()
-    # Catch SSLError
+        request1 = requests.get(
+            url, headers=headers, stream=stream, verify=verify, cookies=cookies
+        )
+        request1.raise_for_status()
     except requests.exceptions.SSLError:
-        # Run it again with verify=False (for SSL certificate)
-        return request_manager(url=url, stream=stream, verify=False, retrys=retrys)
-    # Catch Timeout
+        return request_manager(
+            url=url, stream=stream, verify=False, retries=retries, cookies=cookies
+        )
     except requests.exceptions.Timeout:
-        # Retry 4 more times
-        if retrys < 5:
-            return request_manager(url=url, stream=stream, verify=verify, retrys=retrys+1)
-        # If after 5 runs it still gets a timeout, return
+        if retries < 5:
+            return request_manager(
+                url=url,
+                stream=stream,
+                verify=verify,
+                retries=retries + 1,
+                cookies=cookies,
+            )
         else:
-            return f"Timeout on {url}"
-    # Catch ConnectionError
+            return f"{url}: Giving up after {retries} retries"
     except requests.exceptions.ConnectionError as e:
-        # Try one more time
-        if retrys < 1:
-            return request_manager(url=url, stream=stream, verify=verify, retrys=1)
-        # If i catch the error again, return
+        if retries < 1:
+            return request_manager(
+                url=url, stream=stream, verify=verify, retries=1, cookies=cookies
+            )
         else:
             return f"Connection Error on {url}"
-    # Catch HTTPError raised because i ran r.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        # Catch some common http errors
-        if r.status_code == 400:
+        if request1.status_code == 400:
             return f"400: Bad Request ({url})"
-        elif r.status_code == 403:
+        elif request1.status_code == 403:
             return f"403: Forbidden ({url})"
-        elif r.status_code == 404:
+        elif request1.status_code == 404:
             return f"404: Not found ({url})"
-        elif r.status_code == 429:
+        elif request1.status_code == 429:
             return f"429: Too Many Requests ({url})"
-        # If the error isn't specifically caught, return it as a string
         else:
             return str(e)
-    # If nothing goes wrong, return r
-    return r
+    except Exception as e:
+        return str(e)
+    except:
+        return f"That unknown error on {url}"
+    return request1
 
-# Requests file downloader
-def download_file(filename, link):
-    r = request_manager(url=link, stream=True)
-    # if r is not requests.models.Response, it means is an error caugth in request_manager
-    if not isinstance(r, requests.models.Response):
-        return r
-    # Check if the file exists
+
+# Python file file downloader example
+def download_file(filename, link, requester=request_manager, retries=0):
+    request1 = requester(url=link, stream=True)
+    if not isinstance(request1, requests.models.Response):
+        return request1
     if os.path.isfile(filename):
-        if "Content-Length" in list(r.headers.keys()):
-            # Check if Content-Length == it's size
-            if r.headers["Content-Length"] == str(os.path.getsize(filename)):
-                return "File already exists"
-        # If the header doesn't contain Content-Length, we can't check if the local one is the same as the remote one, but we asume it is
-        else:
-            return "File already exists"
-    # If the status code is 200 (OK), download the file
-    if r.status_code == 200:
-        with open(filename, 'wb+') as f:
-            r.raw.decode_content = True
-            shutil.copyfileobj(r.raw, f)
-        if "Content-Length" in list(r.headers.keys()):
-            # If Content-Length == to the file og the size we return
-            if r.headers["Content-Length"] == str(os.path.getsize(filename)):
-                return "File downloaded"
-            # If Content-Length != than the file size, we restart the downloader. From experience, sometimes the connection closes and the best solution is to restart the download
+        if "Content-Length" in list(request1.headers.keys()):
+            if request1.headers["Content-Length"] == str(os.path.getsize(filename)):
+                return True
+    if request1.status_code == 200:
+        with open(filename, "wb+") as f:
+            request1.raw.decode_content = True
+            try:
+                shutil.copyfileobj(request1.raw, f)
+            except Exception as e:
+                return f"Error while downloading {link}. Exception: {e}"
+        if "Content-Length" in list(request1.headers.keys()):
+            if request1.headers["Content-Length"] == str(os.path.getsize(filename)):
+                return True
             else:
-                return download_file(filename, link)
-        # If the header doesn't contain Content-Length, we asume we downloaded the whole file
+                if retries < 5:
+                    download_file(
+                        filename=filename,
+                        link=link,
+                        requester=requester,
+                        retries=retries + 1,
+                    )
+                else:
+                    return f"Error while downloading {link}. Giving up after {retries} retries"
         else:
-            return "File downloaded"
-    # If the status code is not 200, than we got an error
+            return True
     else:
-        return f"Error while downloading {link}. Status code: {r.status_code}"
+        return f"Error while downloading {link}. Status code: {request1.status_code}"
 
-# Selenium image downloader
+
+
+# Selenium image downloader example (not recommended)
 def selenium_download(driver, img_url, filename, width=None, height=None):
     driver.get(img_url)
     driver.find_element(By.TAG_NAME, "img").click()
@@ -104,3 +124,31 @@ def selenium_download(driver, img_url, filename, width=None, height=None):
     with open(filename, 'wb+') as f:
             f.write(img_val)
     return True
+
+
+# Youtube-dl embedded example
+def download_video_yt(id, filename=None):
+    class MyLogger(object):
+        def __init__(self, id):
+            self.id = id
+
+        def debug(self, msg):
+            pass
+
+        def warning(self, msg):
+            pass
+
+        def error(self, msg):
+            return f"Youtube: Error while downloading {self.id} - {msg}"
+
+    ydl_opts = {
+        "format": "best[ext=mp4]/best[height<=1080]/best[height<=720]",
+        "outtmpl": "%(id)s" if filename == None else str(filename),
+        "quiet": True,
+        "no_warnings": True,
+        "ignoreerrors": True,
+        "cookiefile": f"{local_vars.yt_cookies_file}",
+        "logger": MyLogger(id),
+    }
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        return ydl.download([f"https://www.youtube.com/watch?v={id}"])
