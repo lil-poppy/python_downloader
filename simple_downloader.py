@@ -1,31 +1,35 @@
 import os, requests, shutil
 
-def download_file(filename, link):
-    r = requests.get(url=link, stream=True)
-    # Check if the file exists
+
+def download_file(filename, link, retries=0):
+    request1 = requests.get(url=link, stream=True)
+    if not isinstance(request1, requests.models.Response):
+        return request1
     if os.path.isfile(filename):
-        if "Content-Length" in list(r.headers.keys()):
-            # Check if Content-Length == it's size
-            if r.headers["Content-Length"] == str(os.path.getsize(filename)):
-                return "File already exists"
-        # If the header doesn't contain Content-Length, we can't check if the local one is the same as the remote one, but we asume it is
-        else:
-            return "File already exists"
-    # If the status code is 200 (OK), download the file
-    if r.status_code == 200:
-        with open(filename, 'wb+') as f:
-            r.raw.decode_content = True
-            shutil.copyfileobj(r.raw, f)
-        if "Content-Length" in list(r.headers.keys()):
-            # If Content-Length == to the file og the size we return
-            if r.headers["Content-Length"] == str(os.path.getsize(filename)):
-                return "File downloaded"
-            # If Content-Length != than the file size, we restart the downloader. From experience, sometimes the connection closes and the best solution is to restart the download
+        if "Content-Length" in list(request1.headers.keys()):
+            if request1.headers["Content-Length"] == str(os.path.getsize(filename)):
+                return 0
+    if request1.status_code == 200:
+        with open(filename, "wb+") as f:
+            request1.raw.decode_content = True
+            try:
+                shutil.copyfileobj(request1.raw, f)
+            except Exception as e:
+                return f"Error while downloading {link}. Exception: {e}"
+        if "Content-Length" in list(request1.headers.keys()):
+            if request1.headers["Content-Length"] == str(os.path.getsize(filename)):
+                return 0
+            if retries < 5:
+                download_file(
+                    filename=filename,
+                    link=link,
+                    retries=retries + 1,
+                )
             else:
-                return download_file(filename, link)
-        # If the header doesn't contain Content-Length, we asume we downloaded the whole file
+                return (
+                    f"Error while downloading {link}. Giving up after {retries} retries"
+                )
         else:
-            return "File downloaded"
-    # If the status code is not 200, than we got an error
+            return 0
     else:
-        return f"Error while downloading {link}. Status code: {r.status_code}"
+        return f"Error while downloading {link}. Status code: {request1.status_code}"
